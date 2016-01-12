@@ -1,48 +1,24 @@
-/*
- * Copyright 2006 Sun Microsystems, Inc.  All Rights Reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *   - Redistributions of source code must retain the above copyright
- *     notice, this list of conditions and the following disclaimer.
- *
- *   - Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *
- *   - Neither the name of Sun Microsystems nor the names of its
- *     contributors may be used to endorse or promote products derived
- *     from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
- * IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
- * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
 /**
- * Originally from:
+ * Copyright 2006 Sun Microsystems, Inc.  All Rights Reserved.
+ * Originally posted at: (not available now)
  * http://blogs.sun.com/andreas/resource/InstallCert.java
+ * this version:
+ * http://code.naishe.in/2011/07/looks-like-article-no-more-unable-to.html
  * Use:
  * java InstallCert hostname
  * Example:
- *% java InstallCert ecc.fedora.redhat.com
+ * % java InstallCert ecc.fedora.redhat.com
  */
 
 import javax.net.ssl.*;
 import java.io.*;
+import java.net.URL;
+import java.net.URLConnection;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.prefs.Preferences;
 
 /**
  * Class used to add the server's certificate to the KeyStore
@@ -50,31 +26,47 @@ import java.security.cert.X509Certificate;
  */
 public class InstallCert {
 
-    public static void main(String[] args) throws Exception {
-        String host;
-        int port;
-        char[] passphrase;
-        if ((args.length == 1) || (args.length == 2)) {
-            String[] c = args[0].split(":");
-            host = c[0];
-            port = (c.length == 1) ? 443 : Integer.parseInt(c[1]);
-            String p = (args.length == 1) ? "changeit" : args[1];
-            passphrase = p.toCharArray();
-        } else {
-            System.out.println("Usage: java InstallCert [:port] [passphrase]");
+    private static final String DEFAULT_PASSPHRASE = "changeit";
+
+    public static void main(String[] argc) {
+        if(!isAdmin()) {
+            System.out.println("you need admin/root access to modify keystore");
             return;
         }
-
-        File file = new File("jssecacerts");
-        if (file.isFile() == false) {
-            char SEP = File.separatorChar;
-            File dir = new File(System.getProperty("java.home") + SEP
-                    + "lib" + SEP + "security");
-            file = new File(dir, "jssecacerts");
-            if (file.isFile() == false) {
-                file = new File(dir, "cacerts");
-            }
+        if (argc.length == 0) {
+            System.out.println("USAGE: java InstallCert <valid URI> [keystore-passphrase]");
         }
+        try {
+            for (int i = 0; i < argc.length; i++) {
+                System.out.println("[" + i + "] " + argc[i]);
+            }
+            if (argc.length > 1) {
+                install(argc[0], argc[1]);
+            } else {
+                install(argc[0]);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void install(String urlString) throws Exception {
+        install(urlString, DEFAULT_PASSPHRASE);
+    }
+
+    public static void install(String urlString, String passString) throws Exception {
+        URL url = new URL(urlString);
+        String host = url.getHost();
+        int port = url.getPort();
+        if (port < 0) {
+            port = url.getDefaultPort();
+        }
+        char[] passphrase = passString.toCharArray();
+        File dir = new File(
+                System.getProperty("java.home") + File.separatorChar
+                        + "lib" + File.separatorChar + "security");
+        File file = new File(dir, "cacerts");
+
         System.out.println("Loading KeyStore " + file + "...");
         InputStream in = new FileInputStream(file);
         KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
@@ -83,7 +75,8 @@ public class InstallCert {
 
         SSLContext context = SSLContext.getInstance("TLS");
         TrustManagerFactory tmf =
-                TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                TrustManagerFactory.getInstance(TrustManagerFactory
+                        .getDefaultAlgorithm());
         tmf.init(ks);
         X509TrustManager defaultTrustManager = (X509TrustManager) tmf.getTrustManagers()[0];
         SavingTrustManager tm = new SavingTrustManager(defaultTrustManager);
@@ -91,7 +84,7 @@ public class InstallCert {
         SSLSocketFactory factory = context.getSocketFactory();
 
         System.out.println("Opening connection to " + host + ":" + port + "...");
-        SSLSocket socket = (SSLSocket) factory.createSocket(host, port);
+        final SSLSocket socket = (SSLSocket) factory.createSocket(host, port);
         socket.setSoTimeout(10000);
         try {
             System.out.println("Starting SSL handshake...");
@@ -99,9 +92,10 @@ public class InstallCert {
             socket.close();
             System.out.println();
             System.out.println("No errors, certificate is already trusted");
-        } catch (SSLException e) {
-            System.out.println();
-            e.printStackTrace(System.out);
+            return;
+        } catch (final SSLException e) {
+            System.out.println("SSL error, installing certificate: " + e.getMessage());
+            //e.printStackTrace(System.out);
         }
 
         X509Certificate[] chain = tm.chain;
@@ -109,9 +103,6 @@ public class InstallCert {
             System.out.println("Could not obtain server certificate chain");
             return;
         }
-
-        BufferedReader reader =
-                new BufferedReader(new InputStreamReader(System.in));
 
         System.out.println();
         System.out.println("Server sent " + chain.length + " certificate(s):");
@@ -130,30 +121,37 @@ public class InstallCert {
             System.out.println();
         }
 
-        System.out.println("Enter certificate to add to trusted keystore or 'q' to quit: [1]");
-        String line = reader.readLine().trim();
-        int k;
-        try {
+        //System.out.println("Enter certificate to add to trusted keystore or 'q' to quit: [1]");
+        //String line = reader.readLine().trim();
+        int k = 1; // getting first - just for specified host
+        /*try {
             k = (line.length() == 0) ? 0 : Integer.parseInt(line) - 1;
         } catch (NumberFormatException e) {
             System.out.println("KeyStore not changed");
             return;
-        }
+        }*/
 
         X509Certificate cert = chain[k];
         String alias = host + "-" + (k + 1);
         ks.setCertificateEntry(alias, cert);
 
-        OutputStream out = new FileOutputStream("jssecacerts");
+        OutputStream out = new FileOutputStream(file.getAbsolutePath());
         ks.store(out, passphrase);
         out.close();
 
         System.out.println();
         System.out.println(cert);
         System.out.println();
-        System.out.println
-                ("Added certificate to keystore 'jssecacerts' using alias '"
-                        + alias + "'");
+        System.out.println(
+                "Added certificate to keystore '" + file.getAbsolutePath() + "' using alias '" + alias + "'"
+        );
+
+        System.out.println("revalidate url with plain URLConnection...");
+        URLConnection connection = url.openConnection();
+        connection.connect();
+        int contentLength = connection.getContentLength();
+        System.out.println("content length for " + url + " : " + contentLength);
+        System.out.println("ALL DONE!");
     }
 
     private static final char[] HEXDIGITS = "0123456789abcdef".toCharArray();
@@ -169,35 +167,58 @@ public class InstallCert {
         return sb.toString();
     }
 
+    // http://stackoverflow.com/questions/4350356/detect-if-java-application-was-run-as-a-windows-admin
+    public static boolean isAdmin() {
+        Preferences prefs = Preferences.systemRoot();
+        synchronized (System.err) {    // better synchroize to avoid problems with other threads that access System.err
+            System.setErr(null);
+            try {
+                String key = "test_access_"+System.currentTimeMillis();
+                prefs.put(key, "foobar"); // SecurityException on Windows
+                prefs.remove(key);
+                prefs.flush(); // BackingStoreException on Linux
+                return true;
+            } catch (Exception e) {
+                return false;
+            } finally {
+                System.setErr(System.err);
+            }
+        }
+    }
+
     private static class SavingTrustManager implements X509TrustManager {
 
         private final X509TrustManager tm;
         private X509Certificate[] chain;
 
-        SavingTrustManager(X509TrustManager tm) {
+        SavingTrustManager(final X509TrustManager tm) {
             this.tm = tm;
         }
 
+        @Override
         public X509Certificate[] getAcceptedIssuers() {
-	   
-	    /** 
-	     * This change has been done due to the following resolution advised for Java 1.7+
-		http://infposs.blogspot.kr/2013/06/installcert-and-java-7.html
-       	     **/ 
-	    
-	    return new X509Certificate[0];	
-            //throw new UnsupportedOperationException();
+            /**
+             * This change has been done due to the following resolution advised for Java 1.7+
+             http://infposs.blogspot.kr/2013/06/installcert-and-java-7.html
+             **/
+            return new X509Certificate[0];
+            // throw new UnsupportedOperationException();
         }
 
-        public void checkClientTrusted(X509Certificate[] chain, String authType)
-                throws CertificateException {
+        @Override
+        public void checkClientTrusted(final X509Certificate[] chain, final String authType)
+                throws CertificateException
+        {
             throw new UnsupportedOperationException();
         }
 
-        public void checkServerTrusted(X509Certificate[] chain, String authType)
-                throws CertificateException {
+        @Override
+        public void checkServerTrusted(final X509Certificate[] chain, final String authType)
+                throws CertificateException
+        {
             this.chain = chain;
-            tm.checkServerTrusted(chain, authType);
+            this.tm.checkServerTrusted(chain, authType);
         }
     }
+
 }
