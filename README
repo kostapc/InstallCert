@@ -60,3 +60,5 @@ keytool -exportcert -alias example.com-1 -keystore jssecacerts -storepass change
 yes
 
     Certificate was added to keystore
+
+
